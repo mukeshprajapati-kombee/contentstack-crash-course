@@ -1,11 +1,8 @@
-import contentstack, {
-  QueryOperation,
-  Region,
-} from "@contentstack/delivery-sdk";
-import { Page } from "./types";
+import contentstack, { Region } from "@contentstack/delivery-sdk";
 import ContentstackLivePreview, {
   IStackSdk,
 } from "@contentstack/live-preview-utils";
+import { gqlRequest } from "./graphql-client";
 
 export const stack = contentstack.stack({
   apiKey: process.env.NEXT_PUBLIC_CONTENTSTACK_API_KEY as string,
@@ -42,20 +39,87 @@ export function initLivePreview() {
 }
 
 export async function getKombee(url: string) {
-  const result = await stack
-    .contentType("page")
-    .entry()
-    .query()
-    .where("url", QueryOperation.EQUALS, url)
-    .find<Page>();
+  const query = `
+    query PageQuery($url: String!) {
+      all_page(where: {url: $url}) {
+        items {
+         blocks {
+            ... on PageBlocksBlock {
+              __typename
+              block {
+                title
+                copy
+                layout
+                imageConnection {
+                  edges {
+                    node {
+                      url
+                      unique_identifier
+                      title
+                      permanent_url
+                      content_type
+                      description
+                      file_size
+                      filename
+                      metadata
+                      parent_uid
+                      system {
+                        uid
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          title
+          description
+          url
+          rich_text
+          imageConnection {
+            edges {
+              node {
+                url
+                title
+              }
+            }
+          }
+          system {
+            uid
+            branch
+          }
+        }
+      }
+    }
+  `;
 
-  if (result.entries) {
-    const entry = result.entries[0];
+  const res = await gqlRequest(query, {
+    variables: { url },
+  });
+
+  const data = await res.json();
+  const page = data.data.all_page.items[0];
+
+  if (page) {
+    const transformed = {
+      ...page,
+      uid: page.system.uid,
+      image: page.imageConnection?.edges[0]?.node,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      blocks: page.blocks?.map((item: any) => ({
+        block: {
+          ...item.block,
+          image: item.block.imageConnection?.edges[0]?.node,
+        },
+      })),
+    };
 
     if (process.env.NEXT_PUBLIC_CONTENTSTACK_PREVIEW === "true") {
-      contentstack.Utils.addEditableTags(entry, "page", true);
+      contentstack.Utils.addEditableTags(transformed, "page", true);
     }
 
-    return entry;
+    return transformed;
   }
+
+  return null;
 }
